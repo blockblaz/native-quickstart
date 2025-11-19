@@ -54,6 +54,12 @@ Options:
   --generate-genesis      Generate genesis file (default: use existing)
   --no-genesis            Skip genesis generation (default behavior)
   --stop                  Stop all running containers
+  --start-l1              Start only L1 node
+  --start-l2              Start only L2 node
+  --start-sequencer       Start only sequencer
+  --stop-l1               Stop only L1 node
+  --stop-l2               Stop only L2 node
+  --stop-sequencer        Stop only sequencer
   --help                  Show this help message
 
 Environment Variables:
@@ -87,6 +93,14 @@ Examples:
   # Stop all containers
   $0 --stop
 
+  # Start/stop individual services
+  $0 --start-l1              # Start only L1 node
+  $0 --start-l2              # Start only L2 node
+  $0 --start-sequencer       # Start only sequencer
+  $0 --stop-l1               # Stop only L1 node
+  $0 --stop-l2               # Stop only L2 node
+  $0 --stop-sequencer        # Stop only sequencer
+
 EOF
 }
 
@@ -94,6 +108,12 @@ EOF
 # Parse Arguments
 # ========================================
 STOP_ONLY=false
+START_L1_ONLY=false
+START_L2_ONLY=false
+START_SEQUENCER_ONLY=false
+STOP_L1_ONLY=false
+STOP_L2_ONLY=false
+STOP_SEQUENCER_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -165,6 +185,30 @@ while [[ $# -gt 0 ]]; do
             STOP_ONLY=true
             shift
             ;;
+        --start-l1)
+            START_L1_ONLY=true
+            shift
+            ;;
+        --start-l2)
+            START_L2_ONLY=true
+            shift
+            ;;
+        --start-sequencer)
+            START_SEQUENCER_ONLY=true
+            shift
+            ;;
+        --stop-l1)
+            STOP_L1_ONLY=true
+            shift
+            ;;
+        --stop-l2)
+            STOP_L2_ONLY=true
+            shift
+            ;;
+        --stop-sequencer)
+            STOP_SEQUENCER_ONLY=true
+            shift
+            ;;
         --help|-h)
             show_usage
             exit 0
@@ -193,6 +237,39 @@ if [ "$STOP_ONLY" = true ]; then
     exit 0
 fi
 
+# Stop individual services
+if [ "$STOP_L1_ONLY" = true ]; then
+    echo "🛑 Stopping L1 node..."
+    docker stop native-quickstart-l1 2>/dev/null || true
+    docker rm native-quickstart-l1 2>/dev/null || true
+    echo "✅ L1 node stopped"
+    exit 0
+fi
+
+if [ "$STOP_L2_ONLY" = true ]; then
+    echo "🛑 Stopping L2 node..."
+    docker stop native-quickstart-l2 2>/dev/null || true
+    docker rm native-quickstart-l2 2>/dev/null || true
+    echo "✅ L2 node stopped"
+    exit 0
+fi
+
+if [ "$STOP_SEQUENCER_ONLY" = true ]; then
+    echo "🛑 Stopping sequencer..."
+    docker stop native-quickstart-sequencer 2>/dev/null || true
+    docker rm native-quickstart-sequencer 2>/dev/null || true
+    echo "✅ Sequencer stopped"
+    exit 0
+fi
+
+# Determine which services to start
+# Default: start all services if no individual start flags are specified
+START_ALL=true
+if [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    # If any individual service flag is set, don't start all services
+    START_ALL=false
+fi
+
 # ========================================
 # Check Dependencies
 # ========================================
@@ -216,15 +293,18 @@ echo ""
 # ========================================
 # Create Docker Network
 # ========================================
-NETWORK_NAME="native-quickstart-network"
-echo "🌐 Setting up Docker network..."
-if ! docker network inspect "$NETWORK_NAME" &>/dev/null; then
-    docker network create "$NETWORK_NAME"
-    echo "  ✅ Created Docker network: $NETWORK_NAME"
-else
-    echo "  ℹ️  Docker network already exists: $NETWORK_NAME"
+# Always create network if starting any service
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    NETWORK_NAME="native-quickstart-network"
+    echo "🌐 Setting up Docker network..."
+    if ! docker network inspect "$NETWORK_NAME" &>/dev/null; then
+        docker network create "$NETWORK_NAME"
+        echo "  ✅ Created Docker network: $NETWORK_NAME"
+    else
+        echo "  ℹ️  Docker network already exists: $NETWORK_NAME"
+    fi
+    echo ""
 fi
-echo ""
 
 # ========================================
 # Create Directories
@@ -281,476 +361,513 @@ fi
 # ========================================
 # Cleanup Existing Containers
 # ========================================
-echo "🧹 Cleaning up any existing containers..."
-# Stop and remove all related containers
-docker stop native-quickstart-l1 native-quickstart-l2 native-quickstart-sequencer 2>/dev/null || true
-docker rm native-quickstart-l1 native-quickstart-l2 native-quickstart-sequencer 2>/dev/null || true
-
-# Also check for containers using our ports and clean them up
-for port in "$L1_PORT" "$L2_PORT" "$L2_ENGINE_PORT" "$SEQUENCER_PORT"; do
-    CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$port->" | awk '{print $1}' | head -n 1)
-    if [ -n "$CONTAINER_USING_PORT" ]; then
-        echo "  🛑 Removing container $CONTAINER_USING_PORT using port $port"
-        docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
-        docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    echo "🧹 Cleaning up any existing containers..."
+    # Stop and remove containers based on what we're starting
+    if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+        docker stop native-quickstart-l1 2>/dev/null || true
+        docker rm native-quickstart-l1 2>/dev/null || true
     fi
-done
-echo ""
+    if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+        docker stop native-quickstart-l2 2>/dev/null || true
+        docker rm native-quickstart-l2 2>/dev/null || true
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+        docker stop native-quickstart-sequencer 2>/dev/null || true
+        docker rm native-quickstart-sequencer 2>/dev/null || true
+    fi
+    
+    # Also check for containers using our ports and clean them up
+    PORTS_TO_CHECK=""
+    if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+        PORTS_TO_CHECK="$PORTS_TO_CHECK $L1_PORT"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+        PORTS_TO_CHECK="$PORTS_TO_CHECK $L2_PORT $L2_ENGINE_PORT"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+        PORTS_TO_CHECK="$PORTS_TO_CHECK $SEQUENCER_PORT"
+    fi
+    
+    for port in $PORTS_TO_CHECK; do
+        CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$port->" | awk '{print $1}' | head -n 1)
+        if [ -n "$CONTAINER_USING_PORT" ]; then
+            echo "  🛑 Removing container $CONTAINER_USING_PORT using port $port"
+            docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
+            docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
+        fi
+    done
+    echo ""
+fi
 
 # ========================================
 # Pull Docker Images
 # ========================================
-echo "📥 Pulling Docker images..."
-docker pull "$GETH_IMAGE" || echo "  ⚠️  Failed to pull $GETH_IMAGE, will try to use local image"
-docker pull "$SEQUENCER_IMAGE" || echo "  ⚠️  Failed to pull $SEQUENCER_IMAGE, will try to use local image"
-echo ""
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    echo "📥 Pulling Docker images..."
+    if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ]; then
+        docker pull "$GETH_IMAGE" || echo "  ⚠️  Failed to pull $GETH_IMAGE, will try to use local image"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+        docker pull "$SEQUENCER_IMAGE" || echo "  ⚠️  Failed to pull $SEQUENCER_IMAGE, will try to use local image"
+    fi
+    echo ""
+fi
 
 # ========================================
 # Initialize L1 Node
 # ========================================
-echo "🚀 Initializing L1 node..."
-if [ ! -d "$DATA_DIR/l1/geth" ]; then
-    docker run --rm \
-        -v "$GENESIS_DIR:/genesis" \
-        -v "$DATA_DIR/l1:/data" \
-        "$GETH_IMAGE" \
-        init --datadir /data /genesis/genesis.json
-    echo "  ✅ L1 node initialized"
-else
-    echo "  ℹ️  L1 node already initialized, skipping"
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+    echo "🚀 Initializing L1 node..."
+    if [ ! -d "$DATA_DIR/l1/geth" ]; then
+        docker run --rm \
+            -v "$GENESIS_DIR:/genesis" \
+            -v "$DATA_DIR/l1:/data" \
+            "$GETH_IMAGE" \
+            init --datadir /data /genesis/genesis.json
+        echo "  ✅ L1 node initialized"
+    else
+        echo "  ℹ️  L1 node already initialized, skipping"
+    fi
+    echo ""
 fi
-echo ""
 
 # ========================================
 # Initialize L2 Node
 # ========================================
-echo "🚀 Initializing L2 node..."
-if [ ! -d "$DATA_DIR/l2/geth" ]; then
-    docker run --rm \
-        -v "$GENESIS_DIR:/genesis" \
-        -v "$DATA_DIR/l2:/data" \
-        "$GETH_IMAGE" \
-        init --datadir /data /genesis/genesis.json
-    echo "  ✅ L2 node initialized"
-else
-    echo "  ℹ️  L2 node already initialized, skipping"
+if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+    echo "🚀 Initializing L2 node..."
+    if [ ! -d "$DATA_DIR/l2/geth" ]; then
+        docker run --rm \
+            -v "$GENESIS_DIR:/genesis" \
+            -v "$DATA_DIR/l2:/data" \
+            "$GETH_IMAGE" \
+            init --datadir /data /genesis/genesis.json
+        echo "  ✅ L2 node initialized"
+    else
+        echo "  ℹ️  L2 node already initialized, skipping"
+    fi
+    echo ""
 fi
-echo ""
 
 # ========================================
 # Start L1 Node
 # ========================================
-echo "🌐 Starting L1 node..."
-
-# Stop and remove existing container
-docker stop native-quickstart-l1 2>/dev/null || true
-docker rm native-quickstart-l1 2>/dev/null || true
-
-# Check if port is already in use
-if lsof -Pi :$L1_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
-    echo "  ⚠️  Port $L1_PORT is already in use. Attempting to free it..."
-    # Try to find and stop container using this port (check all containers)
-    CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$L1_PORT" | awk '{print $1}' | head -n 1)
-    if [ -n "$CONTAINER_USING_PORT" ]; then
-        echo "  🛑 Stopping and removing container $CONTAINER_USING_PORT using port $L1_PORT"
-        docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
-        docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+    echo "🌐 Starting L1 node..."
+    
+    # Stop and remove existing container
+    docker stop native-quickstart-l1 2>/dev/null || true
+    docker rm native-quickstart-l1 2>/dev/null || true
+    
+    # Check if port is already in use
+    if lsof -Pi :$L1_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
+        echo "  ⚠️  Port $L1_PORT is already in use. Attempting to free it..."
+        # Try to find and stop container using this port (check all containers)
+        CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$L1_PORT" | awk '{print $1}' | head -n 1)
+        if [ -n "$CONTAINER_USING_PORT" ]; then
+            echo "  🛑 Stopping and removing container $CONTAINER_USING_PORT using port $L1_PORT"
+            docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
+            docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
+        else
+            echo "  ⚠️  Port $L1_PORT is in use but not by a Docker container. Please free the port manually."
+            echo "  💡 You can check what's using it with: lsof -i :$L1_PORT"
+        fi
+        sleep 2
+    fi
+    
+    # Get signer account (first account) for Clique block production
+    SIGNER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
+    if [[ ! "$SIGNER_KEY_RAW" =~ ^0x ]]; then
+        SIGNER_KEY="0x$SIGNER_KEY_RAW"
     else
-        echo "  ⚠️  Port $L1_PORT is in use but not by a Docker container. Please free the port manually."
-        echo "  💡 You can check what's using it with: lsof -i :$L1_PORT"
+        SIGNER_KEY="$SIGNER_KEY_RAW"
     fi
-    sleep 2
+    SIGNER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
+    
+    # Create empty password file for unlocking accounts
+    echo "" > "$DATA_DIR/l1/password.txt"
+    
+    docker run -d \
+        --name native-quickstart-l1 \
+        --network "$NETWORK_NAME" \
+        -p "$L1_PORT:8545" \
+        -p "$((L1_PORT + 1)):30303" \
+        -v "$DATA_DIR/l1:/data" \
+        "$GETH_IMAGE" \
+        --datadir /data \
+        --http \
+        --http.addr 0.0.0.0 \
+        --http.port 8545 \
+        --http.api eth,net,web3,debug \
+        --http.corsdomain "*" \
+        --http.vhosts "*" \
+        --networkid "$L1_CHAIN_ID" \
+        --nodiscover \
+        --override.osaka 0 \
+        --verbosity 4 \
+        --vmodule "rpc=5,http=5" \
+        --unlock "$SIGNER_ADDRESS" \
+        --password /data/password.txt \
+        --allow-insecure-unlock \
+        --mine \
+        --miner.etherbase "$SIGNER_ADDRESS"
+    
+    echo "  ✅ L1 node started on port $L1_PORT (PoA/Clique - auto-mining enabled)"
+    echo ""
+    
+    # Wait for L1 to be ready
+    echo "⏳ Waiting for L1 node to be ready..."
+    for i in {1..30}; do
+        if curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            "http://localhost:$L1_PORT" > /dev/null 2>&1; then
+            echo "  ✅ L1 node is ready"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "  ⚠️  L1 node may not be ready yet, continuing anyway"
+        fi
+        sleep 1
+    done
+    echo ""
 fi
-
-# Get signer account (first account) for Clique block production
-SIGNER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
-if [[ ! "$SIGNER_KEY_RAW" =~ ^0x ]]; then
-    SIGNER_KEY="0x$SIGNER_KEY_RAW"
-else
-    SIGNER_KEY="$SIGNER_KEY_RAW"
-fi
-SIGNER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
-
-# Create empty password file for unlocking accounts
-echo "" > "$DATA_DIR/l1/password.txt"
-
-docker run -d \
-    --name native-quickstart-l1 \
-    --network "$NETWORK_NAME" \
-    -p "$L1_PORT:8545" \
-    -p "$((L1_PORT + 1)):30303" \
-    -v "$DATA_DIR/l1:/data" \
-    "$GETH_IMAGE" \
-    --datadir /data \
-    --http \
-    --http.addr 0.0.0.0 \
-    --http.port 8545 \
-    --http.api eth,net,web3,debug \
-    --http.corsdomain "*" \
-    --http.vhosts "*" \
-    --networkid "$L1_CHAIN_ID" \
-    --nodiscover \
-    --override.osaka 0 \
-    --verbosity 4 \
-    --vmodule "rpc=5,http=5" \
-    --unlock "$SIGNER_ADDRESS" \
-    --password /data/password.txt \
-    --allow-insecure-unlock \
-    --mine \
-    --miner.etherbase "$SIGNER_ADDRESS"
-
-echo "  ✅ L1 node started on port $L1_PORT (PoA/Clique - auto-mining enabled)"
-echo ""
-
-# Wait for L1 to be ready
-echo "⏳ Waiting for L1 node to be ready..."
-for i in {1..30}; do
-    if curl -s -X POST -H "Content-Type: application/json" \
-        --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-        "http://localhost:$L1_PORT" > /dev/null 2>&1; then
-        echo "  ✅ L1 node is ready"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        echo "  ⚠️  L1 node may not be ready yet, continuing anyway"
-    fi
-    sleep 1
-done
-echo ""
 
 # ========================================
 # Start L2 Node
 # ========================================
-echo "🌐 Starting L2 node..."
-
-# Stop and remove existing container
-docker stop native-quickstart-l2 2>/dev/null || true
-docker rm native-quickstart-l2 2>/dev/null || true
-
-# Check if port is already in use
-if lsof -Pi :$L2_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
-    echo "  ⚠️  Port $L2_PORT is already in use. Attempting to free it..."
-    # Try to find and stop container using this port (check all containers)
-    CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$L2_PORT" | awk '{print $1}' | head -n 1)
-    if [ -n "$CONTAINER_USING_PORT" ]; then
-        echo "  🛑 Stopping and removing container $CONTAINER_USING_PORT using port $L2_PORT"
-        docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
-        docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
-    else
-        echo "  ⚠️  Port $L2_PORT is in use but not by a Docker container. Please free the port manually."
-        echo "  💡 You can check what's using it with: lsof -i :$L2_PORT"
+if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+    echo "🌐 Starting L2 node..."
+    
+    # Stop and remove existing container
+    docker stop native-quickstart-l2 2>/dev/null || true
+    docker rm native-quickstart-l2 2>/dev/null || true
+    
+    # Check if port is already in use
+    if lsof -Pi :$L2_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
+        echo "  ⚠️  Port $L2_PORT is already in use. Attempting to free it..."
+        # Try to find and stop container using this port (check all containers)
+        CONTAINER_USING_PORT=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep ":$L2_PORT" | awk '{print $1}' | head -n 1)
+        if [ -n "$CONTAINER_USING_PORT" ]; then
+            echo "  🛑 Stopping and removing container $CONTAINER_USING_PORT using port $L2_PORT"
+            docker stop "$CONTAINER_USING_PORT" 2>/dev/null || true
+            docker rm "$CONTAINER_USING_PORT" 2>/dev/null || true
+        else
+            echo "  ⚠️  Port $L2_PORT is in use but not by a Docker container. Please free the port manually."
+            echo "  💡 You can check what's using it with: lsof -i :$L2_PORT"
+        fi
+        sleep 2
     fi
-    sleep 2
+    
+    # L2 node runs without mining - blocks are produced by the sequencer via Engine API
+    docker run -d \
+        --name native-quickstart-l2 \
+        --network "$NETWORK_NAME" \
+        -p "$L2_PORT:8545" \
+        -p "$L2_ENGINE_PORT:8551" \
+        -p "$((L2_PORT + 1)):30303" \
+        -v "$DATA_DIR/l2:/data" \
+        "$GETH_IMAGE" \
+        --datadir /data \
+        --http \
+        --http.addr 0.0.0.0 \
+        --http.port 8545 \
+        --http.api eth,net,web3,debug,engine \
+        --http.corsdomain "*" \
+        --http.vhosts "*" \
+        --authrpc.addr 0.0.0.0 \
+        --authrpc.port 8551 \
+        --authrpc.vhosts "*" \
+        --networkid "$L2_CHAIN_ID" \
+        --nodiscover \
+        --override.osaka 0 \
+        --verbosity 4 \
+        --vmodule "rpc=5,http=5"
+    
+    echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT - blocks produced by sequencer)"
+    echo ""
+    
+    # Wait for L2 to be ready
+    echo "⏳ Waiting for L2 node to be ready..."
+    for i in {1..30}; do
+        if curl -s -X POST -H "Content-Type: application/json" \
+            --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+            "http://localhost:$L2_PORT" > /dev/null 2>&1; then
+            echo "  ✅ L2 node is ready"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "  ⚠️  L2 node may not be ready yet, continuing anyway"
+        fi
+        sleep 1
+    done
+    echo ""
 fi
-
-# L2 node runs without mining - blocks are produced by the sequencer via Engine API
-docker run -d \
-    --name native-quickstart-l2 \
-    --network "$NETWORK_NAME" \
-    -p "$L2_PORT:8545" \
-    -p "$L2_ENGINE_PORT:8551" \
-    -p "$((L2_PORT + 1)):30303" \
-    -v "$DATA_DIR/l2:/data" \
-    "$GETH_IMAGE" \
-    --datadir /data \
-    --http \
-    --http.addr 0.0.0.0 \
-    --http.port 8545 \
-    --http.api eth,net,web3,debug,engine \
-    --http.corsdomain "*" \
-    --http.vhosts "*" \
-    --authrpc.addr 0.0.0.0 \
-    --authrpc.port 8551 \
-    --authrpc.vhosts "*" \
-    --networkid "$L2_CHAIN_ID" \
-    --nodiscover \
-    --override.osaka 0 \
-    --verbosity 4 \
-    --vmodule "rpc=5,http=5"
-
-echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT - blocks produced by sequencer)"
-echo ""
-
-# Wait for L2 to be ready
-echo "⏳ Waiting for L2 node to be ready..."
-for i in {1..30}; do
-    if curl -s -X POST -H "Content-Type: application/json" \
-        --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-        "http://localhost:$L2_PORT" > /dev/null 2>&1; then
-        echo "  ✅ L2 node is ready"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        echo "  ⚠️  L2 node may not be ready yet, continuing anyway"
-    fi
-    sleep 1
-done
-echo ""
 
 # ========================================
 # Start Sequencer
 # ========================================
-echo "🎯 Starting native sequencer..."
-
-# Get sequencer key (use first account's private key)
-SEQUENCER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
-# Ensure key has 0x prefix
-if [[ ! "$SEQUENCER_KEY_RAW" =~ ^0x ]]; then
-    SEQUENCER_KEY="0x$SEQUENCER_KEY_RAW"
-else
-    SEQUENCER_KEY="$SEQUENCER_KEY_RAW"
+if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    echo "🎯 Starting native sequencer..."
+    
+    # Get sequencer key (use first account's private key)
+    SEQUENCER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
+    # Ensure key has 0x prefix
+    if [[ ! "$SEQUENCER_KEY_RAW" =~ ^0x ]]; then
+        SEQUENCER_KEY="0x$SEQUENCER_KEY_RAW"
+    else
+        SEQUENCER_KEY="$SEQUENCER_KEY_RAW"
+    fi
+    
+    docker stop native-quickstart-sequencer 2>/dev/null || true
+    docker rm native-quickstart-sequencer 2>/dev/null || true
+    
+    docker run -d \
+        --name native-quickstart-sequencer \
+        --network "$NETWORK_NAME" \
+        -p "$SEQUENCER_PORT:8545" \
+        -p "$SEQUENCER_METRICS_PORT:9090" \
+        -v "$DATA_DIR/sequencer:/app/data" \
+        -e L1_RPC_URL="http://native-quickstart-l1:8545" \
+        -e L2_RPC_URL="http://native-quickstart-l2:8545" \
+        -e L2_ENGINE_API_PORT="$L2_ENGINE_PORT" \
+        -e L1_CHAIN_ID="$L1_CHAIN_ID" \
+        -e L2_CHAIN_ID="$L2_CHAIN_ID" \
+        -e SEQUENCER_KEY="$SEQUENCER_KEY" \
+        -e API_PORT=8545 \
+        -e METRICS_PORT=9090 \
+        "$SEQUENCER_IMAGE"
+    
+    echo "  ✅ Sequencer started on port $SEQUENCER_PORT (metrics on $SEQUENCER_METRICS_PORT)"
+    echo ""
 fi
-
-docker stop native-quickstart-sequencer 2>/dev/null || true
-docker rm native-quickstart-sequencer 2>/dev/null || true
-
-docker run -d \
-    --name native-quickstart-sequencer \
-    --network "$NETWORK_NAME" \
-    -p "$SEQUENCER_PORT:8545" \
-    -p "$SEQUENCER_METRICS_PORT:9090" \
-    -v "$DATA_DIR/sequencer:/app/data" \
-    -e L1_RPC_URL="http://native-quickstart-l1:8545" \
-    -e L2_RPC_URL="http://native-quickstart-l2:8545" \
-    -e L2_ENGINE_API_PORT="$L2_ENGINE_PORT" \
-    -e L1_CHAIN_ID="$L1_CHAIN_ID" \
-    -e L2_CHAIN_ID="$L2_CHAIN_ID" \
-    -e SEQUENCER_KEY="$SEQUENCER_KEY" \
-    -e API_PORT=8545 \
-    -e METRICS_PORT=9090 \
-    "$SEQUENCER_IMAGE"
-
-echo "  ✅ Sequencer started on port $SEQUENCER_PORT (metrics on $SEQUENCER_METRICS_PORT)"
-echo ""
 
 # ========================================
 # Deploy NativeRollup Contract
 # ========================================
-echo "📦 Deploying NativeRollup contract on L1..."
-echo "  📍 Step 1/7: Preparing for deployment..."
-
-# Wait for L1 to be fully ready and process some blocks
-echo "  ⏳ Step 2/7: Waiting for L1 node to be fully ready..."
-sleep 5
-
-# Check L1 block number to ensure it's processing blocks
-echo "  🔍 Step 3/7: Checking L1 node status..."
-L1_BLOCK_NUMBER=$(cast block-number --rpc-url "http://localhost:$L1_PORT" 2>/dev/null || echo "")
-if [ -n "$L1_BLOCK_NUMBER" ]; then
-    echo "  ✅ L1 node is ready (current block: $L1_BLOCK_NUMBER)"
-else
-    echo "  ⚠️  Could not get L1 block number, but continuing..."
-fi
-
-# Additional wait to ensure everything is stable
-echo "  ⏳ Step 4/7: Waiting additional 5 seconds for stability..."
-sleep 5
-
-# Check and install Foundry if needed
-check_and_install_foundry() {
-    echo "  🔍 Step 5/7: Checking for Foundry..."
-    if command -v forge &> /dev/null; then
-        echo "  ✅ Foundry is already installed"
-        return 0
+# Only deploy if starting all services or if L1 is being started
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+    echo "📦 Deploying NativeRollup contract on L1..."
+    echo "  📍 Step 1/7: Preparing for deployment..."
+    
+    # Wait for L1 to be fully ready and process some blocks
+    echo "  ⏳ Step 2/7: Waiting for L1 node to be fully ready..."
+    sleep 5
+    
+    # Check L1 block number to ensure it's processing blocks
+    echo "  🔍 Step 3/7: Checking L1 node status..."
+    L1_BLOCK_NUMBER=$(cast block-number --rpc-url "http://localhost:$L1_PORT" 2>/dev/null || echo "")
+    if [ -n "$L1_BLOCK_NUMBER" ]; then
+        echo "  ✅ L1 node is ready (current block: $L1_BLOCK_NUMBER)"
+    else
+        echo "  ⚠️  Could not get L1 block number, but continuing..."
     fi
     
-    echo "  ⚠️  Foundry (forge) not found. Attempting to install..."
-    
-    # Check if foundryup is available
-    if command -v foundryup &> /dev/null; then
-        echo "  📥 Installing Foundry using foundryup..."
-        foundryup 2>&1 | head -20
-        # Reload PATH to make forge available
-        export PATH="$HOME/.foundry/bin:$PATH"
-    else
-        # Try to install foundryup first
-        echo "  📥 Installing foundryup..."
-        if command -v curl &> /dev/null; then
-            curl -L https://foundry.paradigm.xyz | bash
+    # Additional wait to ensure everything is stable
+    echo "  ⏳ Step 4/7: Waiting additional 5 seconds for stability..."
+    sleep 5
+
+    # Check and install Foundry if needed
+    check_and_install_foundry() {
+        echo "  🔍 Step 5/7: Checking for Foundry..."
+        if command -v forge &> /dev/null; then
+            echo "  ✅ Foundry is already installed"
+            return 0
+        fi
+        
+        echo "  ⚠️  Foundry (forge) not found. Attempting to install..."
+        
+        # Check if foundryup is available
+        if command -v foundryup &> /dev/null; then
+            echo "  📥 Installing Foundry using foundryup..."
+            foundryup 2>&1 | head -20
+            # Reload PATH to make forge available
             export PATH="$HOME/.foundry/bin:$PATH"
-            # Run foundryup after installation
-            if command -v foundryup &> /dev/null; then
-                foundryup 2>&1 | head -20
-            fi
         else
-            echo "  ❌ curl not found. Cannot install Foundry automatically."
+            # Try to install foundryup first
+            echo "  📥 Installing foundryup..."
+            if command -v curl &> /dev/null; then
+                curl -L https://foundry.paradigm.xyz | bash
+                export PATH="$HOME/.foundry/bin:$PATH"
+                # Run foundryup after installation
+                if command -v foundryup &> /dev/null; then
+                    foundryup 2>&1 | head -20
+                fi
+            else
+                echo "  ❌ curl not found. Cannot install Foundry automatically."
+                echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
+                return 1
+            fi
+        fi
+        
+        # Verify installation
+        if command -v forge &> /dev/null; then
+            echo "  ✅ Foundry installed successfully"
+            return 0
+        else
+            echo "  ⚠️  Foundry installation may have failed. forge command not found."
             echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
             return 1
         fi
-    fi
+    }
     
-    # Verify installation
-    if command -v forge &> /dev/null; then
-        echo "  ✅ Foundry installed successfully"
-        return 0
-    else
-        echo "  ⚠️  Foundry installation may have failed. forge command not found."
-        echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
-        return 1
-    fi
-}
-
-# Check and install Foundry if needed
-if ! check_and_install_foundry; then
-    echo "  ❌ Step 5/7 failed: Skipping NativeRollup deployment due to missing Foundry."
-    NATIVE_ROLLUP_ADDRESS=""
-else
-    # Ensure forge is in PATH
-    export PATH="$HOME/.foundry/bin:$PATH"
-    
-    if ! command -v forge &> /dev/null; then
-        echo "  ❌ Foundry (forge) still not found after installation attempt."
-        echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
+    # Check and install Foundry if needed
+    if ! check_and_install_foundry; then
+        echo "  ❌ Step 5/7 failed: Skipping NativeRollup deployment due to missing Foundry."
         NATIVE_ROLLUP_ADDRESS=""
     else
-        echo "  ✅ Step 5/7 complete: Foundry is ready"
-        echo "  📍 Step 6/7: Preparing deployment parameters..."
+        # Ensure forge is in PATH
+        export PATH="$HOME/.foundry/bin:$PATH"
         
-        # Get deployer account (use first account from genesis)
-        DEPLOYER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
-        # Ensure key has 0x prefix
-        if [[ ! "$DEPLOYER_KEY_RAW" =~ ^0x ]]; then
-            DEPLOYER_KEY="0x$DEPLOYER_KEY_RAW"
-        else
-            DEPLOYER_KEY="$DEPLOYER_KEY_RAW"
-        fi
-        
-        # Get deployer address
-        DEPLOYER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
-        echo "  📝 Deployer address: $DEPLOYER_ADDRESS"
-        echo "  📝 L2 Chain ID: $L2_CHAIN_ID"
-        echo "  📝 RPC URL: http://localhost:$L1_PORT"
-        
-        # Check if native-rollup directory exists
-        NATIVE_ROLLUP_DIR="$SCRIPT_DIR/native-rollup"
-        if [ ! -d "$NATIVE_ROLLUP_DIR" ]; then
-            echo "  ❌ Step 6/7 failed: NativeRollup contract directory not found at $NATIVE_ROLLUP_DIR"
-            echo "  💡 Skipping NativeRollup deployment."
+        if ! command -v forge &> /dev/null; then
+            echo "  ❌ Foundry (forge) still not found after installation attempt."
+            echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
             NATIVE_ROLLUP_ADDRESS=""
         else
-            echo "  ✅ Step 6/7 complete: Contract directory found: $NATIVE_ROLLUP_DIR"
+            echo "  ✅ Step 5/7 complete: Foundry is ready"
+            echo "  📍 Step 6/7: Preparing deployment parameters..."
             
-            # Build the contract first
-            echo "  📍 Step 7/7: Building and deploying contract..."
-            echo "  🔨 Building NativeRollup contract..."
-            cd "$NATIVE_ROLLUP_DIR"
+            # Get deployer account (use first account from genesis)
+            DEPLOYER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
+            # Ensure key has 0x prefix
+            if [[ ! "$DEPLOYER_KEY_RAW" =~ ^0x ]]; then
+                DEPLOYER_KEY="0x$DEPLOYER_KEY_RAW"
+            else
+                DEPLOYER_KEY="$DEPLOYER_KEY_RAW"
+            fi
             
-            BUILD_OUTPUT=$(forge build 2>&1)
-            BUILD_EXIT_CODE=$?
+            # Get deployer address
+            DEPLOYER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
+            echo "  📝 Deployer address: $DEPLOYER_ADDRESS"
+            echo "  📝 L2 Chain ID: $L2_CHAIN_ID"
+            echo "  📝 RPC URL: http://localhost:$L1_PORT"
             
-            if [ $BUILD_EXIT_CODE -ne 0 ]; then
-                echo "  ❌ Build failed (exit code: $BUILD_EXIT_CODE)"
-                echo "  📝 Build output:"
-                echo "$BUILD_OUTPUT" | tail -30
+            # Check if native-rollup directory exists
+            NATIVE_ROLLUP_DIR="$SCRIPT_DIR/native-rollup"
+            if [ ! -d "$NATIVE_ROLLUP_DIR" ]; then
+                echo "  ❌ Step 6/7 failed: NativeRollup contract directory not found at $NATIVE_ROLLUP_DIR"
+                echo "  💡 Skipping NativeRollup deployment."
                 NATIVE_ROLLUP_ADDRESS=""
             else
-                echo "  ✅ Contract built successfully"
+                echo "  ✅ Step 6/7 complete: Contract directory found: $NATIVE_ROLLUP_DIR"
                 
-                # Deploy using forge create (simpler and more reliable)
-                echo "  🚀 Deploying NativeRollup contract..."
-                echo "  📝 Deployment parameters:"
-                echo "     - RPC URL: http://localhost:$L1_PORT"
-                echo "     - Constructor args: L2_CHAIN_ID=$L2_CHAIN_ID"
-                echo "     - Contract: src/NativeRollup.sol:NativeRollup"
+                # Build the contract first
+                echo "  📍 Step 7/7: Building and deploying contract..."
+                echo "  🔨 Building NativeRollup contract..."
+                cd "$NATIVE_ROLLUP_DIR"
                 
-                # Deploy contract with constructor argument (chainId)
-                # Using forge create which handles transaction and receipt properly
-                # Note: Contract validates L2 chainId from execute transactions
-                echo "  ⏳ Sending deployment transaction..."
-                DEPLOY_OUTPUT=$(forge create \
-                    --rpc-url "http://localhost:$L1_PORT" \
-                    --private-key "$DEPLOYER_KEY" \
-                    --constructor-args "$L2_CHAIN_ID" \
-                    --broadcast \
-                    --json \
-                    src/NativeRollup.sol:NativeRollup 2>&1)
+                BUILD_OUTPUT=$(forge build 2>&1)
+                BUILD_EXIT_CODE=$?
                 
-                DEPLOY_EXIT_CODE=$?
-                echo "  📝 Deployment command exit code: $DEPLOY_EXIT_CODE"
-                
-                # Check if forge create failed
-                if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
-                    echo "  ❌ Deployment failed (exit code: $DEPLOY_EXIT_CODE)"
-                    echo "  📝 Error output:"
-                    echo "$DEPLOY_OUTPUT" | head -40
-                    NATIVE_ROLLUP_ADDRESS=""
-                elif [ -z "$DEPLOY_OUTPUT" ]; then
-                    echo "  ⚠️  No output from forge create"
+                if [ $BUILD_EXIT_CODE -ne 0 ]; then
+                    echo "  ❌ Build failed (exit code: $BUILD_EXIT_CODE)"
+                    echo "  📝 Build output:"
+                    echo "$BUILD_OUTPUT" | tail -30
                     NATIVE_ROLLUP_ADDRESS=""
                 else
-                    echo "  ✅ Received response from forge create"
-                    echo "  📝 Parsing deployment output..."
+                    echo "  ✅ Contract built successfully"
                     
-                    # Extract contract address from forge create output
-                    # Check if output is valid JSON
-                    if ! echo "$DEPLOY_OUTPUT" | jq empty 2>/dev/null; then
-                        echo "  ⚠️  Invalid JSON output from forge create"
-                        echo "  📝 Raw output (first 30 lines):"
-                        echo "$DEPLOY_OUTPUT" | head -30
+                    # Deploy using forge create (simpler and more reliable)
+                    echo "  🚀 Deploying NativeRollup contract..."
+                    echo "  📝 Deployment parameters:"
+                    echo "     - RPC URL: http://localhost:$L1_PORT"
+                    echo "     - Constructor args: L2_CHAIN_ID=$L2_CHAIN_ID"
+                    echo "     - Contract: src/NativeRollup.sol:NativeRollup"
+                    
+                    # Deploy contract with constructor argument (chainId)
+                    # Using forge create which handles transaction and receipt properly
+                    # Note: Contract validates L2 chainId from execute transactions
+                    echo "  ⏳ Sending deployment transaction..."
+                    # Note: We're already in $NATIVE_ROLLUP_DIR, so use the contract path format
+                    DEPLOY_OUTPUT=$(forge create --rpc-url "http://localhost:$L1_PORT" --private-key "$DEPLOYER_KEY" --constructor-args "$L2_CHAIN_ID" --broadcast --json "src/NativeRollup.sol:NativeRollup" 2>&1)
+                    
+                    DEPLOY_EXIT_CODE=$?
+                    echo "  📝 Deployment command exit code: $DEPLOY_EXIT_CODE"
+                    
+                    # Check if forge create failed
+                    if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
+                        echo "  ❌ Deployment failed (exit code: $DEPLOY_EXIT_CODE)"
+                        echo "  📝 Error output:"
+                        echo "$DEPLOY_OUTPUT" | head -40
+                        NATIVE_ROLLUP_ADDRESS=""
+                    elif [ -z "$DEPLOY_OUTPUT" ]; then
+                        echo "  ⚠️  No output from forge create"
                         NATIVE_ROLLUP_ADDRESS=""
                     else
-                        echo "  ✅ Valid JSON response received"
-                        echo "  📝 Extracting contract address..."
+                        echo "  ✅ Received response from forge create"
+                        echo "  📝 Parsing deployment output..."
                         
-                        # Try multiple possible JSON field names for the contract address
-                        # forge create --json output structure may vary by version
-                        NATIVE_ROLLUP_ADDRESS=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployedTo // .contractAddress // .address // empty' 2>/dev/null)
-                        
-                        # Try to get transaction hash from various possible fields
-                        TX_HASH=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployment.transaction.hash // .transactionHash // .txHash // .hash // empty' 2>/dev/null)
-                        
-                        echo "  📝 Extracted address: ${NATIVE_ROLLUP_ADDRESS:-<none>}"
-                        echo "  📝 Extracted tx hash: ${TX_HASH:-<none>}"
-                        
-                        # Debug: show the actual JSON structure if address not found
-                        if [ -z "$NATIVE_ROLLUP_ADDRESS" ] || [ "$NATIVE_ROLLUP_ADDRESS" = "null" ]; then
-                            echo "  ⚠️  Could not extract address from JSON response"
-                            echo "  📝 Full JSON structure:"
-                            echo "$DEPLOY_OUTPUT" | jq '.' 2>/dev/null | head -40
+                        # Extract contract address from forge create output
+                        # Check if output is valid JSON
+                        if ! echo "$DEPLOY_OUTPUT" | jq empty 2>/dev/null; then
+                            echo "  ⚠️  Invalid JSON output from forge create"
+                            echo "  📝 Raw output (first 30 lines):"
+                            echo "$DEPLOY_OUTPUT" | head -30
+                            NATIVE_ROLLUP_ADDRESS=""
+                        else
+                            echo "  ✅ Valid JSON response received"
+                            echo "  📝 Extracting contract address..."
                             
-                            # Try to extract from transaction receipt if we have a tx hash
-                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
-                                echo "  📝 Transaction hash found: $TX_HASH"
-                                echo "  ⏳ Waiting for transaction to be mined..."
-                                sleep 3
-                                echo "  📝 Fetching transaction receipt..."
-                                RECEIPT=$(cast receipt "$TX_HASH" --rpc-url "http://localhost:$L1_PORT" --json 2>/dev/null)
-                                if [ -n "$RECEIPT" ]; then
-                                    echo "  ✅ Receipt retrieved"
-                                    NATIVE_ROLLUP_ADDRESS=$(echo "$RECEIPT" | jq -r '.contractAddress // .to // empty' 2>/dev/null)
-                                    if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
-                                        echo "  ✅ NativeRollup deployed at: $NATIVE_ROLLUP_ADDRESS (from receipt)"
+                            # Try multiple possible JSON field names for the contract address
+                            # forge create --json output structure may vary by version
+                            NATIVE_ROLLUP_ADDRESS=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployedTo // .contractAddress // .address // empty' 2>/dev/null)
+                            
+                            # Try to get transaction hash from various possible fields
+                            TX_HASH=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployment.transaction.hash // .transactionHash // .txHash // .hash // empty' 2>/dev/null)
+                            
+                            echo "  📝 Extracted address: ${NATIVE_ROLLUP_ADDRESS:-<none>}"
+                            echo "  📝 Extracted tx hash: ${TX_HASH:-<none>}"
+                            
+                            # Debug: show the actual JSON structure if address not found
+                            if [ -z "$NATIVE_ROLLUP_ADDRESS" ] || [ "$NATIVE_ROLLUP_ADDRESS" = "null" ]; then
+                                echo "  ⚠️  Could not extract address from JSON response"
+                                echo "  📝 Full JSON structure:"
+                                echo "$DEPLOY_OUTPUT" | jq '.' 2>/dev/null | head -40
+                                
+                                # Try to extract from transaction receipt if we have a tx hash
+                                if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                    echo "  📝 Transaction hash found: $TX_HASH"
+                                    echo "  ⏳ Waiting for transaction to be mined..."
+                                    sleep 3
+                                    echo "  📝 Fetching transaction receipt..."
+                                    RECEIPT=$(cast receipt "$TX_HASH" --rpc-url "http://localhost:$L1_PORT" --json 2>/dev/null)
+                                    if [ -n "$RECEIPT" ]; then
+                                        echo "  ✅ Receipt retrieved"
+                                        NATIVE_ROLLUP_ADDRESS=$(echo "$RECEIPT" | jq -r '.contractAddress // .to // empty' 2>/dev/null)
+                                        if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
+                                            echo "  ✅ NativeRollup deployed at: $NATIVE_ROLLUP_ADDRESS (from receipt)"
+                                        else
+                                            echo "  ⚠️  Could not extract address from receipt"
+                                            echo "  📝 Receipt structure:"
+                                            echo "$RECEIPT" | jq '.' 2>/dev/null | head -20
+                                        fi
                                     else
-                                        echo "  ⚠️  Could not extract address from receipt"
-                                        echo "  📝 Receipt structure:"
-                                        echo "$RECEIPT" | jq '.' 2>/dev/null | head -20
+                                        echo "  ⚠️  Could not retrieve transaction receipt"
                                     fi
-                                else
-                                    echo "  ⚠️  Could not retrieve transaction receipt"
                                 fi
                             fi
-                        fi
-                        
-                        # Final check and report
-                        if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
-                            echo "  ✅ Step 7/7 complete: NativeRollup deployed successfully!"
-                            echo "  📍 Contract address: $NATIVE_ROLLUP_ADDRESS"
-                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
-                                echo "  📝 Transaction hash: $TX_HASH"
+                            
+                            # Final check and report
+                            if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
+                                echo "  ✅ Step 7/7 complete: NativeRollup deployed successfully!"
+                                echo "  📍 Contract address: $NATIVE_ROLLUP_ADDRESS"
+                                if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                    echo "  📝 Transaction hash: $TX_HASH"
+                                fi
+                            else
+                                echo "  ⚠️  Step 7/7 incomplete: Deployment may have succeeded but address could not be determined"
+                                if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                    echo "  📝 Transaction hash: $TX_HASH"
+                                    echo "  💡 You can check the contract address manually using:"
+                                    echo "     cast receipt $TX_HASH --rpc-url http://localhost:$L1_PORT"
+                                fi
+                                NATIVE_ROLLUP_ADDRESS=""
                             fi
-                        else
-                            echo "  ⚠️  Step 7/7 incomplete: Deployment may have succeeded but address could not be determined"
-                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
-                                echo "  📝 Transaction hash: $TX_HASH"
-                                echo "  💡 You can check the contract address manually using:"
-                                echo "     cast receipt $TX_HASH --rpc-url http://localhost:$L1_PORT"
-                            fi
-                            NATIVE_ROLLUP_ADDRESS=""
                         fi
                     fi
                 fi
+                cd "$SCRIPT_DIR"
             fi
-            cd "$SCRIPT_DIR"
         fi
     fi
 fi
@@ -759,30 +876,47 @@ echo ""
 # ========================================
 # Summary
 # ========================================
-echo "✅ Devnet started successfully!"
-echo ""
-echo "📊 Services:"
-echo "  🌐 L1 Node:      http://localhost:$L1_PORT"
-echo "  🌐 L2 Node:      http://localhost:$L2_PORT"
-echo "  🔧 L2 Engine:    http://localhost:$L2_ENGINE_PORT"
-echo "  🎯 Sequencer:    http://localhost:$SEQUENCER_PORT"
-echo "  📈 Metrics:      http://localhost:$SEQUENCER_METRICS_PORT"
-echo ""
-if [ -n "$NATIVE_ROLLUP_ADDRESS" ]; then
-    echo "📦 Contracts:"
-    echo "  📄 NativeRollup:  $NATIVE_ROLLUP_ADDRESS (L2 Chain ID: $L2_CHAIN_ID)"
+if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    echo "✅ Services started successfully!"
+    echo ""
+    echo "📊 Running Services:"
+    if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+        echo "  🌐 L1 Node:      http://localhost:$L1_PORT"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+        echo "  🌐 L2 Node:      http://localhost:$L2_PORT"
+        echo "  🔧 L2 Engine:    http://localhost:$L2_ENGINE_PORT"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+        echo "  🎯 Sequencer:    http://localhost:$SEQUENCER_PORT"
+        echo "  📈 Metrics:      http://localhost:$SEQUENCER_METRICS_PORT"
+    fi
+    echo ""
+    if [ -n "$NATIVE_ROLLUP_ADDRESS" ]; then
+        echo "📦 Contracts:"
+        echo "  📄 NativeRollup:  $NATIVE_ROLLUP_ADDRESS (L2 Chain ID: $L2_CHAIN_ID)"
+        echo ""
+    fi
+    echo "📝 Accounts:"
+    echo "  Generated $NUM_WALLETS wallets with ${WALLET_BALANCE} ETH each"
+    echo "  Account details: $GENESIS_DIR/accounts.txt"
+    echo ""
+    echo "🛑 To stop services:"
+    echo "  $0 --stop              # Stop all services"
+    echo "  $0 --stop-l1           # Stop only L1"
+    echo "  $0 --stop-l2           # Stop only L2"
+    echo "  $0 --stop-sequencer    # Stop only sequencer"
+    echo ""
+    echo "📖 View logs:"
+    if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
+        echo "  docker logs -f native-quickstart-l1"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
+        echo "  docker logs -f native-quickstart-l2"
+    fi
+    if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+        echo "  docker logs -f native-quickstart-sequencer"
+    fi
     echo ""
 fi
-echo "📝 Accounts:"
-echo "  Generated $NUM_WALLETS wallets with ${WALLET_BALANCE} ETH each"
-echo "  Account details: $GENESIS_DIR/accounts.txt"
-echo ""
-echo "🛑 To stop all services:"
-echo "  $0 --stop"
-echo ""
-echo "📖 View logs:"
-echo "  docker logs -f native-quickstart-l1"
-echo "  docker logs -f native-quickstart-l2"
-echo "  docker logs -f native-quickstart-sequencer"
-echo ""
 
