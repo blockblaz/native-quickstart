@@ -1,0 +1,7 @@
+# Optional Python dependencies for native-quickstart
+# Install with: pip install -r requirements.txt
+
+# For proper Ethereum address derivation from private keys
+# If not installed, the script uses a deterministic fallback method
+eth-account>=0.8.0
+

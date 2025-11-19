@@ -1,0 +1,29 @@
+# Data directories
+data/
+*.db
+*.wal
+
+# Genesis files (can be regenerated)
+genesis/
+*.json
+accounts.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
