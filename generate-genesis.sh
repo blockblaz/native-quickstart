@@ -191,6 +191,14 @@ with open("${GENESIS_DIR}/accounts.txt", "r") as f:
         accounts[address] = {"balance": balance_wei}
 
 # Create genesis block
+# Get first account address for Clique signer
+first_account = list(accounts.keys())[0] if accounts else None
+signer_address = first_account if first_account else "0x0000000000000000000000000000000000000000"
+
+# Clique extraData: 32 bytes of zeros + signer addresses (20 bytes each) + 65 bytes of zeros
+# Format: 0x + 32 zeros + signer address (without 0x) + 65 zeros
+extra_data = "0x" + "0" * 64 + signer_address[2:] + "0" * 130
+
 genesis = {
     "config": {
         "chainId": ${CHAIN_ID},
@@ -207,7 +215,10 @@ genesis = {
         "arrowGlacierBlock": 0,
         "grayGlacierBlock": 0,
         "mergeNetsplitBlock": 0,
-        "terminalTotalDifficulty": 0,
+        "clique": {
+            "period": 5,
+            "epoch": 30000
+        },
         "shanghaiTime": 0,
         "cancunTime": 0,
         "pragueTime": 0,
@@ -230,8 +241,9 @@ genesis = {
             }
         }
     },
-    "difficulty": "0x0",
+    "difficulty": "0x1",
     "gasLimit": "0x1c9c380",
+    "extraData": extra_data,
     "alloc": accounts
 }
 

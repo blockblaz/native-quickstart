@@ -13,6 +13,11 @@ A tool to quickly bring up a devnet with:
 - ✅ **Easy Configuration**: Configurable via command-line arguments or environment variables
 - ✅ **Docker-based**: Uses Docker containers for easy setup and cleanup
 - ✅ **Single Command**: Start everything with one command
+- ✅ **Automatic Block Production**: L1 uses Clique PoA consensus (blocks every 5 seconds)
+- ✅ **Sequencer-driven L2**: L2 blocks produced by sequencer via Engine API
+- ✅ **RPC Request Logging**: Full RPC request/response logging enabled for debugging
+- ✅ **NativeRollup Contract**: Automatically deploys NativeRollup contract on L1
+- ✅ **Foundry Auto-install**: Automatically installs Foundry if not present
 
 ## Requirements
 
@@ -28,6 +33,10 @@ A tool to quickly bring up a devnet with:
   pip install eth-account
   ```
   If not installed, the script uses a deterministic fallback method suitable for devnets.
+
+- **Foundry**: Automatically installed if not present (required for NativeRollup contract deployment)
+  - The script will attempt to install Foundry automatically
+  - Manual installation: [Foundry Installation Guide](https://book.getfoundry.sh/getting-started/installation)
 
 ## Quick Start
 
@@ -114,10 +123,24 @@ export L2_PORT=18545
 After starting, the following services are available:
 
 - **L1 Node**: `http://localhost:8545` (default)
+  - Uses **Clique PoA consensus** - automatically produces blocks every 5 seconds
+  - First account from genesis is the block signer/miner
 - **L2 Node**: `http://localhost:18545` (default)
+  - Blocks are produced by the sequencer via Engine API
+  - No local mining - receives blocks from sequencer
 - **L2 Engine API**: `http://localhost:18551` (default)
+  - Used by sequencer to submit blocks to L2 node
 - **Sequencer**: `http://localhost:18547` (default)
+  - Produces L2 blocks and submits them via Engine API
 - **Sequencer Metrics**: `http://localhost:9090` (default)
+
+### NativeRollup Contract
+
+The script automatically deploys the NativeRollup contract on L1 after all services are started:
+- Contract address is displayed in the startup summary
+- Uses the first account from genesis as the deployer
+- Deterministic deployment (same address on each devnet start)
+- Contract validates execute transaction chainId and calls EXECUTE precompile
 
 ## Account Management
 
@@ -169,14 +192,29 @@ curl -X POST http://localhost:8545 \
 ### View Logs
 
 ```bash
-# L1 node logs
+# L1 node logs (includes RPC request logging)
 docker logs -f native-quickstart-l1
 
-# L2 node logs
+# L2 node logs (includes RPC request logging)
 docker logs -f native-quickstart-l2
 
 # Sequencer logs
 docker logs -f native-quickstart-sequencer
+```
+
+**Note**: Both L1 and L2 nodes have RPC request logging enabled (`--vmodule "rpc=5,http=5"`). You'll see detailed logs of all JSON-RPC requests and responses, making it easy to debug and monitor interactions with the nodes.
+
+### Block Production
+
+```bash
+# Check L1 block number (should increase every 5 seconds)
+cast block-number --rpc-url http://localhost:8545
+
+# Check L2 block number (produced by sequencer)
+cast block-number --rpc-url http://localhost:18545
+
+# Watch L1 blocks being produced
+watch -n 1 'cast block-number --rpc-url http://localhost:8545'
 ```
 
 ### Check Status
@@ -228,6 +266,9 @@ The genesis file is generated in `genesis/genesis.json` and includes:
 - Pre-funded accounts (10 wallets with 100 ETH each by default)
 - Chain configuration
 - Network ID
+- **Clique PoA consensus** configuration (for L1 block production)
+  - Block period: 5 seconds
+  - First account is configured as the signer
 
 ### Genesis Generation Behavior
 
@@ -321,6 +362,34 @@ If you encounter issues with account generation, install the eth-account library
 pip install eth-account
 ```
 
+## Architecture
+
+### Block Production
+
+- **L1 Node**: Uses Clique (Proof of Authority) consensus
+  - Automatically produces blocks every 5 seconds
+  - First account from genesis is the signer/miner
+  - No beacon node required
+  - Block rewards go to the signer account
+
+- **L2 Node**: Receives blocks from sequencer
+  - No local mining/mining flags
+  - Blocks are produced by the sequencer
+  - Sequencer submits blocks via Engine API (`engine_newPayloadV2`, `engine_forkchoiceUpdatedV2`)
+  - Standard rollup architecture
+
+### Consensus Mechanisms
+
+- **L1**: Clique PoA (Proof of Authority)
+  - Simple consensus for devnets
+  - Automatic block production
+  - No external dependencies
+
+- **L2**: Engine API (PoS-like)
+  - Sequencer-driven block production
+  - Compatible with standard rollup architecture
+  - Engine API for block submission
+
 ## Advanced Usage
 
 ### Custom Chain IDs
@@ -328,6 +397,11 @@ pip install eth-account
 ```bash
 # Use custom chain IDs (defaults are 61971 for L1, 61972 for L2)
 ./start-devnet.sh --l1-chain-id 1337 --l2-chain-id 1338
+```
+
+**Note**: If you change chain IDs, make sure to regenerate the genesis file:
+```bash
+./start-devnet.sh --clean-data --generate-genesis --l1-chain-id 1337 --l2-chain-id 1338
 ```
 
 ### Multiple Devnets
@@ -341,6 +415,23 @@ DATA_DIR=./data1 ./start-devnet.sh --l1-port 8545 --l2-port 18545 --sequencer-po
 DATA_DIR=./data2 ./start-devnet.sh --l1-port 28545 --l2-port 28546 --sequencer-port 28547
 ```
 
+### NativeRollup Contract
+
+The NativeRollup contract is automatically deployed on L1 after all services start. The contract address is displayed in the startup summary.
+
+**Contract Features**:
+- Validates chainId from execute transaction calldata
+- Calls EXECUTE precompile (address `0x12`) to validate witness data
+- Returns gas consumed or errors on failure
+- Located in `native-rollup/` directory
+
+**Using the Contract**:
+```bash
+# Contract address is shown in startup summary
+# Example usage with cast:
+cast call <CONTRACT_ADDRESS> "chainId()" --rpc-url http://localhost:8545
+```
+
 ### Integration with Other Tools
 
 The devnet can be integrated with other development tools:
@@ -352,6 +443,23 @@ export L2_RPC_URL=http://localhost:18545
 export SEQUENCER_RPC_URL=http://localhost:18547
 
 # Your tool can now connect to the devnet
+```
+
+### RPC Request Logging
+
+Both L1 and L2 nodes log all RPC requests with detailed information:
+- Incoming JSON-RPC requests
+- Method calls and parameters
+- HTTP request details
+- Response data
+
+View logs to see all RPC activity:
+```bash
+# View L1 RPC requests
+docker logs -f native-quickstart-l1 | grep -i rpc
+
+# View L2 RPC requests
+docker logs -f native-quickstart-l2 | grep -i rpc
 ```
 
 ## License

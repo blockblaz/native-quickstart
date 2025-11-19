@@ -362,6 +362,18 @@ if lsof -Pi :$L1_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
     sleep 2
 fi
 
+# Get signer account (first account) for Clique block production
+SIGNER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
+if [[ ! "$SIGNER_KEY_RAW" =~ ^0x ]]; then
+    SIGNER_KEY="0x$SIGNER_KEY_RAW"
+else
+    SIGNER_KEY="$SIGNER_KEY_RAW"
+fi
+SIGNER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
+
+# Create empty password file for unlocking accounts
+echo "" > "$DATA_DIR/l1/password.txt"
+
 docker run -d \
     --name native-quickstart-l1 \
     --network "$NETWORK_NAME" \
@@ -378,9 +390,16 @@ docker run -d \
     --http.vhosts "*" \
     --networkid "$L1_CHAIN_ID" \
     --nodiscover \
-    --override.osaka 0
+    --override.osaka 0 \
+    --verbosity 4 \
+    --vmodule "rpc=5,http=5" \
+    --unlock "$SIGNER_ADDRESS" \
+    --password /data/password.txt \
+    --allow-insecure-unlock \
+    --mine \
+    --miner.etherbase "$SIGNER_ADDRESS"
 
-echo "  ✅ L1 node started on port $L1_PORT"
+echo "  ✅ L1 node started on port $L1_PORT (PoA/Clique - auto-mining enabled)"
 echo ""
 
 # Wait for L1 to be ready
@@ -424,6 +443,7 @@ if lsof -Pi :$L2_PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; then
     sleep 2
 fi
 
+# L2 node runs without mining - blocks are produced by the sequencer via Engine API
 docker run -d \
     --name native-quickstart-l2 \
     --network "$NETWORK_NAME" \
@@ -444,9 +464,11 @@ docker run -d \
     --authrpc.vhosts "*" \
     --networkid "$L2_CHAIN_ID" \
     --nodiscover \
-    --override.osaka 0
+    --override.osaka 0 \
+    --verbosity 4 \
+    --vmodule "rpc=5,http=5"
 
-echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT)"
+echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT - blocks produced by sequencer)"
 echo ""
 
 # Wait for L2 to be ready
@@ -502,6 +524,239 @@ echo "  ✅ Sequencer started on port $SEQUENCER_PORT (metrics on $SEQUENCER_MET
 echo ""
 
 # ========================================
+# Deploy NativeRollup Contract
+# ========================================
+echo "📦 Deploying NativeRollup contract on L1..."
+echo "  📍 Step 1/7: Preparing for deployment..."
+
+# Wait for L1 to be fully ready and process some blocks
+echo "  ⏳ Step 2/7: Waiting for L1 node to be fully ready..."
+sleep 5
+
+# Check L1 block number to ensure it's processing blocks
+echo "  🔍 Step 3/7: Checking L1 node status..."
+L1_BLOCK_NUMBER=$(cast block-number --rpc-url "http://localhost:$L1_PORT" 2>/dev/null || echo "")
+if [ -n "$L1_BLOCK_NUMBER" ]; then
+    echo "  ✅ L1 node is ready (current block: $L1_BLOCK_NUMBER)"
+else
+    echo "  ⚠️  Could not get L1 block number, but continuing..."
+fi
+
+# Additional wait to ensure everything is stable
+echo "  ⏳ Step 4/7: Waiting additional 5 seconds for stability..."
+sleep 5
+
+# Check and install Foundry if needed
+check_and_install_foundry() {
+    echo "  🔍 Step 5/7: Checking for Foundry..."
+    if command -v forge &> /dev/null; then
+        echo "  ✅ Foundry is already installed"
+        return 0
+    fi
+    
+    echo "  ⚠️  Foundry (forge) not found. Attempting to install..."
+    
+    # Check if foundryup is available
+    if command -v foundryup &> /dev/null; then
+        echo "  📥 Installing Foundry using foundryup..."
+        foundryup 2>&1 | head -20
+        # Reload PATH to make forge available
+        export PATH="$HOME/.foundry/bin:$PATH"
+    else
+        # Try to install foundryup first
+        echo "  📥 Installing foundryup..."
+        if command -v curl &> /dev/null; then
+            curl -L https://foundry.paradigm.xyz | bash
+            export PATH="$HOME/.foundry/bin:$PATH"
+            # Run foundryup after installation
+            if command -v foundryup &> /dev/null; then
+                foundryup 2>&1 | head -20
+            fi
+        else
+            echo "  ❌ curl not found. Cannot install Foundry automatically."
+            echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
+            return 1
+        fi
+    fi
+    
+    # Verify installation
+    if command -v forge &> /dev/null; then
+        echo "  ✅ Foundry installed successfully"
+        return 0
+    else
+        echo "  ⚠️  Foundry installation may have failed. forge command not found."
+        echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
+        return 1
+    fi
+}
+
+# Check and install Foundry if needed
+if ! check_and_install_foundry; then
+    echo "  ❌ Step 5/7 failed: Skipping NativeRollup deployment due to missing Foundry."
+    NATIVE_ROLLUP_ADDRESS=""
+else
+    # Ensure forge is in PATH
+    export PATH="$HOME/.foundry/bin:$PATH"
+    
+    if ! command -v forge &> /dev/null; then
+        echo "  ❌ Foundry (forge) still not found after installation attempt."
+        echo "  💡 Please install Foundry manually: https://book.getfoundry.sh/getting-started/installation"
+        NATIVE_ROLLUP_ADDRESS=""
+    else
+        echo "  ✅ Step 5/7 complete: Foundry is ready"
+        echo "  📍 Step 6/7: Preparing deployment parameters..."
+        
+        # Get deployer account (use first account from genesis)
+        DEPLOYER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
+        # Ensure key has 0x prefix
+        if [[ ! "$DEPLOYER_KEY_RAW" =~ ^0x ]]; then
+            DEPLOYER_KEY="0x$DEPLOYER_KEY_RAW"
+        else
+            DEPLOYER_KEY="$DEPLOYER_KEY_RAW"
+        fi
+        
+        # Get deployer address
+        DEPLOYER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
+        echo "  📝 Deployer address: $DEPLOYER_ADDRESS"
+        echo "  📝 L2 Chain ID: $L2_CHAIN_ID"
+        echo "  📝 RPC URL: http://localhost:$L1_PORT"
+        
+        # Check if native-rollup directory exists
+        NATIVE_ROLLUP_DIR="$SCRIPT_DIR/native-rollup"
+        if [ ! -d "$NATIVE_ROLLUP_DIR" ]; then
+            echo "  ❌ Step 6/7 failed: NativeRollup contract directory not found at $NATIVE_ROLLUP_DIR"
+            echo "  💡 Skipping NativeRollup deployment."
+            NATIVE_ROLLUP_ADDRESS=""
+        else
+            echo "  ✅ Step 6/7 complete: Contract directory found: $NATIVE_ROLLUP_DIR"
+            
+            # Build the contract first
+            echo "  📍 Step 7/7: Building and deploying contract..."
+            echo "  🔨 Building NativeRollup contract..."
+            cd "$NATIVE_ROLLUP_DIR"
+            
+            BUILD_OUTPUT=$(forge build 2>&1)
+            BUILD_EXIT_CODE=$?
+            
+            if [ $BUILD_EXIT_CODE -ne 0 ]; then
+                echo "  ❌ Build failed (exit code: $BUILD_EXIT_CODE)"
+                echo "  📝 Build output:"
+                echo "$BUILD_OUTPUT" | tail -30
+                NATIVE_ROLLUP_ADDRESS=""
+            else
+                echo "  ✅ Contract built successfully"
+                
+                # Deploy using forge create (simpler and more reliable)
+                echo "  🚀 Deploying NativeRollup contract..."
+                echo "  📝 Deployment parameters:"
+                echo "     - RPC URL: http://localhost:$L1_PORT"
+                echo "     - Constructor args: L2_CHAIN_ID=$L2_CHAIN_ID"
+                echo "     - Contract: src/NativeRollup.sol:NativeRollup"
+                
+                # Deploy contract with constructor argument (chainId)
+                # Using forge create which handles transaction and receipt properly
+                # Note: Contract validates L2 chainId from execute transactions
+                echo "  ⏳ Sending deployment transaction..."
+                DEPLOY_OUTPUT=$(forge create \
+                    --rpc-url "http://localhost:$L1_PORT" \
+                    --private-key "$DEPLOYER_KEY" \
+                    --constructor-args "$L2_CHAIN_ID" \
+                    --broadcast \
+                    --json \
+                    src/NativeRollup.sol:NativeRollup 2>&1)
+                
+                DEPLOY_EXIT_CODE=$?
+                echo "  📝 Deployment command exit code: $DEPLOY_EXIT_CODE"
+                
+                # Check if forge create failed
+                if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
+                    echo "  ❌ Deployment failed (exit code: $DEPLOY_EXIT_CODE)"
+                    echo "  📝 Error output:"
+                    echo "$DEPLOY_OUTPUT" | head -40
+                    NATIVE_ROLLUP_ADDRESS=""
+                elif [ -z "$DEPLOY_OUTPUT" ]; then
+                    echo "  ⚠️  No output from forge create"
+                    NATIVE_ROLLUP_ADDRESS=""
+                else
+                    echo "  ✅ Received response from forge create"
+                    echo "  📝 Parsing deployment output..."
+                    
+                    # Extract contract address from forge create output
+                    # Check if output is valid JSON
+                    if ! echo "$DEPLOY_OUTPUT" | jq empty 2>/dev/null; then
+                        echo "  ⚠️  Invalid JSON output from forge create"
+                        echo "  📝 Raw output (first 30 lines):"
+                        echo "$DEPLOY_OUTPUT" | head -30
+                        NATIVE_ROLLUP_ADDRESS=""
+                    else
+                        echo "  ✅ Valid JSON response received"
+                        echo "  📝 Extracting contract address..."
+                        
+                        # Try multiple possible JSON field names for the contract address
+                        # forge create --json output structure may vary by version
+                        NATIVE_ROLLUP_ADDRESS=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployedTo // .contractAddress // .address // empty' 2>/dev/null)
+                        
+                        # Try to get transaction hash from various possible fields
+                        TX_HASH=$(echo "$DEPLOY_OUTPUT" | jq -r '.deployment.transaction.hash // .transactionHash // .txHash // .hash // empty' 2>/dev/null)
+                        
+                        echo "  📝 Extracted address: ${NATIVE_ROLLUP_ADDRESS:-<none>}"
+                        echo "  📝 Extracted tx hash: ${TX_HASH:-<none>}"
+                        
+                        # Debug: show the actual JSON structure if address not found
+                        if [ -z "$NATIVE_ROLLUP_ADDRESS" ] || [ "$NATIVE_ROLLUP_ADDRESS" = "null" ]; then
+                            echo "  ⚠️  Could not extract address from JSON response"
+                            echo "  📝 Full JSON structure:"
+                            echo "$DEPLOY_OUTPUT" | jq '.' 2>/dev/null | head -40
+                            
+                            # Try to extract from transaction receipt if we have a tx hash
+                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                echo "  📝 Transaction hash found: $TX_HASH"
+                                echo "  ⏳ Waiting for transaction to be mined..."
+                                sleep 3
+                                echo "  📝 Fetching transaction receipt..."
+                                RECEIPT=$(cast receipt "$TX_HASH" --rpc-url "http://localhost:$L1_PORT" --json 2>/dev/null)
+                                if [ -n "$RECEIPT" ]; then
+                                    echo "  ✅ Receipt retrieved"
+                                    NATIVE_ROLLUP_ADDRESS=$(echo "$RECEIPT" | jq -r '.contractAddress // .to // empty' 2>/dev/null)
+                                    if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
+                                        echo "  ✅ NativeRollup deployed at: $NATIVE_ROLLUP_ADDRESS (from receipt)"
+                                    else
+                                        echo "  ⚠️  Could not extract address from receipt"
+                                        echo "  📝 Receipt structure:"
+                                        echo "$RECEIPT" | jq '.' 2>/dev/null | head -20
+                                    fi
+                                else
+                                    echo "  ⚠️  Could not retrieve transaction receipt"
+                                fi
+                            fi
+                        fi
+                        
+                        # Final check and report
+                        if [ -n "$NATIVE_ROLLUP_ADDRESS" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "null" ] && [ "$NATIVE_ROLLUP_ADDRESS" != "" ]; then
+                            echo "  ✅ Step 7/7 complete: NativeRollup deployed successfully!"
+                            echo "  📍 Contract address: $NATIVE_ROLLUP_ADDRESS"
+                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                echo "  📝 Transaction hash: $TX_HASH"
+                            fi
+                        else
+                            echo "  ⚠️  Step 7/7 incomplete: Deployment may have succeeded but address could not be determined"
+                            if [ -n "$TX_HASH" ] && [ "$TX_HASH" != "null" ] && [ "$TX_HASH" != "" ]; then
+                                echo "  📝 Transaction hash: $TX_HASH"
+                                echo "  💡 You can check the contract address manually using:"
+                                echo "     cast receipt $TX_HASH --rpc-url http://localhost:$L1_PORT"
+                            fi
+                            NATIVE_ROLLUP_ADDRESS=""
+                        fi
+                    fi
+                fi
+            fi
+            cd "$SCRIPT_DIR"
+        fi
+    fi
+fi
+echo ""
+
+# ========================================
 # Summary
 # ========================================
 echo "✅ Devnet started successfully!"
@@ -513,6 +768,11 @@ echo "  🔧 L2 Engine:    http://localhost:$L2_ENGINE_PORT"
 echo "  🎯 Sequencer:    http://localhost:$SEQUENCER_PORT"
 echo "  📈 Metrics:      http://localhost:$SEQUENCER_METRICS_PORT"
 echo ""
+if [ -n "$NATIVE_ROLLUP_ADDRESS" ]; then
+    echo "📦 Contracts:"
+    echo "  📄 NativeRollup:  $NATIVE_ROLLUP_ADDRESS (L2 Chain ID: $L2_CHAIN_ID)"
+    echo ""
+fi
 echo "📝 Accounts:"
 echo "  Generated $NUM_WALLETS wallets with ${WALLET_BALANCE} ETH each"
 echo "  Account details: $GENESIS_DIR/accounts.txt"
