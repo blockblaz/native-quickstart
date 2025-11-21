@@ -417,18 +417,11 @@ fi
 # ========================================
 # Initialize L1 Node
 # ========================================
+# Skip genesis initialization for L1 when using dev mode
+# Dev mode creates its own ephemeral PoA network automatically
 if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
-    echo "🚀 Initializing L1 node..."
-    if [ ! -d "$DATA_DIR/l1/geth" ]; then
-        docker run --rm \
-            -v "$GENESIS_DIR:/genesis" \
-            -v "$DATA_DIR/l1:/data" \
-            "$GETH_IMAGE" \
-            init --datadir /data /genesis/genesis.json
-        echo "  ✅ L1 node initialized"
-    else
-        echo "  ℹ️  L1 node already initialized, skipping"
-    fi
+    echo "🚀 L1 node will use dev mode (no genesis initialization needed)..."
+    echo "  ℹ️  Dev mode creates an ephemeral PoA network automatically"
     echo ""
 fi
 
@@ -493,18 +486,9 @@ if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
         sleep 2
     fi
     
-    # Get signer account (first account) for Clique block production
-    SIGNER_KEY_RAW=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f2)
-    if [[ ! "$SIGNER_KEY_RAW" =~ ^0x ]]; then
-        SIGNER_KEY="0x$SIGNER_KEY_RAW"
-    else
-        SIGNER_KEY="$SIGNER_KEY_RAW"
-    fi
-    SIGNER_ADDRESS=$(head -n 1 "$GENESIS_DIR/accounts.txt" | cut -d: -f1)
-    
-    # Create empty password file for unlocking accounts
-    echo "" > "$DATA_DIR/l1/password.txt"
-    
+    # Dev mode automatically creates accounts, enables mining, and uses instant block times
+    # Dev mode manages its own chain ID automatically (cannot specify --networkid)
+    # No need for manual account unlocking or mining configuration
     docker run -d \
         --name native-quickstart-l1 \
         --network "$NETWORK_NAME" \
@@ -512,6 +496,7 @@ if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
         -p "$((L1_PORT + 1)):30303" \
         -v "$DATA_DIR/l1:/data" \
         "$GETH_IMAGE" \
+        --dev \
         --datadir /data \
         --http \
         --http.addr 0.0.0.0 \
@@ -519,18 +504,12 @@ if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
         --http.api eth,net,web3,debug \
         --http.corsdomain "*" \
         --http.vhosts "*" \
-        --networkid "$L1_CHAIN_ID" \
         --nodiscover \
         --override.osaka 0 \
         --verbosity 4 \
-        --vmodule "rpc=5,http=5" \
-        --unlock "$SIGNER_ADDRESS" \
-        --password /data/password.txt \
-        --allow-insecure-unlock \
-        --mine \
-        --miner.etherbase "$SIGNER_ADDRESS"
+        --vmodule "rpc=5,http=5"
     
-    echo "  ✅ L1 node started on port $L1_PORT (PoA/Clique - auto-mining enabled)"
+    echo "  ✅ L1 node started on port $L1_PORT (dev mode - ephemeral PoA network with instant blocks)"
     echo ""
     
     # Wait for L1 to be ready
