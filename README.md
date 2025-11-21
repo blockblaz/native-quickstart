@@ -12,9 +12,11 @@ A tool to quickly bring up a devnet with:
 - ✅ **Safe Defaults**: Uses existing genesis file by default (prevents accidental overwrites)
 - ✅ **Easy Configuration**: Configurable via command-line arguments or environment variables
 - ✅ **Docker-based**: Uses Docker containers for easy setup and cleanup
-- ✅ **Single Command**: Start everything with one command
+- ✅ **Single Command**: Start everything with one command (or start individual services)
+- ✅ **Individual Service Control**: Start/stop individual services (L1, L2, sequencer) independently
 - ✅ **Automatic Block Production**: L1 uses Clique PoA consensus (blocks every 5 seconds)
 - ✅ **Sequencer-driven L2**: L2 blocks produced by sequencer via Engine API
+- ✅ **JWT Authentication**: Automatically generates and configures JWT secret for Engine API authentication
 - ✅ **RPC Request Logging**: Full RPC request/response logging enabled for debugging
 - ✅ **NativeRollup Contract**: Automatically deploys NativeRollup contract on L1
 - ✅ **Foundry Auto-install**: Automatically installs Foundry if not present
@@ -43,10 +45,10 @@ A tool to quickly bring up a devnet with:
 ### Basic Usage
 
 ```bash
-# First time: Generate genesis file and start devnet
+# First time: Generate genesis file and start devnet (all services)
 ./start-devnet.sh --generate-genesis
 
-# Subsequent runs: Use existing genesis file (default behavior)
+# Subsequent runs: Use existing genesis file and start all services (default behavior)
 ./start-devnet.sh
 
 # Stop all services
@@ -54,6 +56,30 @@ A tool to quickly bring up a devnet with:
 ```
 
 **Important**: The script uses existing genesis files by default. If no genesis file exists, you'll get an error prompting you to use `--generate-genesis`.
+
+### Starting Individual Services
+
+You can start individual services independently:
+
+```bash
+# Start only L1 node
+./start-devnet.sh --start-l1
+
+# Start only L2 node
+./start-devnet.sh --start-l2
+
+# Start only sequencer
+./start-devnet.sh --start-sequencer
+
+# Start all services (default behavior when no flags specified)
+./start-devnet.sh
+```
+
+**Note**: When starting individual services, the script will:
+- Only initialize and start the specified service
+- Only clean up containers/ports for the specified service
+- Deploy NativeRollup contract only if L1 is being started
+- Create Docker network if needed
 
 ### Custom Configuration
 
@@ -101,6 +127,12 @@ A tool to quickly bring up a devnet with:
 | `--generate-genesis` | Generate genesis file (overwrites existing) | `false` (use existing) |
 | `--no-genesis` | Skip genesis generation (default behavior) | `true` (default) |
 | `--stop` | Stop all running containers | - |
+| `--start-l1` | Start only L1 node | - |
+| `--start-l2` | Start only L2 node | - |
+| `--start-sequencer` | Start only sequencer | - |
+| `--stop-l1` | Stop only L1 node | - |
+| `--stop-l2` | Stop only L2 node | - |
+| `--stop-sequencer` | Stop only sequencer | - |
 | `--help` | Show help message | - |
 
 **Note**: `--no-genesis` is the default behavior. The script will use existing genesis files and fail with a clear error message if the genesis file doesn't exist, prompting you to use `--generate-genesis`.
@@ -243,10 +275,26 @@ curl http://localhost:9090
 # Stop all containers
 ./start-devnet.sh --stop
 
-# Or manually
+# Stop individual services
+./start-devnet.sh --stop-l1      # Stop only L1
+./start-devnet.sh --stop-l2      # Stop only L2
+./start-devnet.sh --stop-sequencer  # Stop only sequencer
+
+# Or manually stop containers
 docker stop native-quickstart-l1 native-quickstart-l2 native-quickstart-sequencer
 docker rm native-quickstart-l1 native-quickstart-l2 native-quickstart-sequencer
 ```
+
+## JWT Authentication
+
+The script automatically generates and configures JWT authentication for Engine API communication between the sequencer and L2 geth:
+
+- **JWT Secret Generation**: A 32-byte JWT secret is automatically generated on first run and stored at `data/jwt.hex`
+- **L2 Geth Configuration**: The JWT secret is mounted into the L2 geth container and configured via `--authrpc.jwtsecret`
+- **Sequencer Configuration**: The same JWT secret is passed to the sequencer via the `L2_JWT_SECRET` environment variable
+- **Persistence**: The JWT secret persists across restarts (unless `--clean-data` is used)
+
+**Note**: The JWT secret file (`data/jwt.hex`) is automatically added to `.gitignore` for security.
 
 ## Data Persistence
 
@@ -254,11 +302,14 @@ Data is stored in the `data/` directory by default:
 - `data/l1/` - L1 node data
 - `data/l2/` - L2 node data
 - `data/sequencer/` - Sequencer data
+- `data/jwt.hex` - JWT secret for Engine API authentication (auto-generated)
 
 To start fresh:
 ```bash
 ./start-devnet.sh --clean-data
 ```
+
+**Note**: Using `--clean-data` will also remove the JWT secret file, generating a new one on the next run.
 
 ## Genesis File
 
@@ -391,6 +442,32 @@ pip install eth-account
   - Engine API for block submission
 
 ## Advanced Usage
+
+### Starting Services Individually
+
+You can start services one at a time for debugging or development:
+
+```bash
+# Start L1 first
+./start-devnet.sh --start-l1
+
+# Wait for L1 to be ready, then start L2
+./start-devnet.sh --start-l2
+
+# Finally start the sequencer
+./start-devnet.sh --start-sequencer
+```
+
+**Use Cases**:
+- Debug individual service startup issues
+- Test services independently
+- Start services in a specific order
+- Restart a single service without affecting others
+
+**Note**: When starting individual services:
+- The Docker network is created automatically if needed
+- Only the specified service's containers are cleaned up
+- NativeRollup contract is deployed only when starting L1 (or all services)
 
 ### Custom Chain IDs
 

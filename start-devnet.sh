@@ -433,6 +433,23 @@ if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ]; then
 fi
 
 # ========================================
+# Generate JWT Secret
+# ========================================
+JWT_SECRET_FILE="$DATA_DIR/jwt.hex"
+if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
+    if [ ! -f "$JWT_SECRET_FILE" ]; then
+        echo "🔐 Generating JWT secret for Engine API authentication..."
+        # Generate 32-byte (64 hex characters) JWT secret
+        openssl rand -hex 32 > "$JWT_SECRET_FILE"
+        chmod 600 "$JWT_SECRET_FILE"
+        echo "  ✅ JWT secret generated: $JWT_SECRET_FILE"
+    else
+        echo "  ℹ️  Using existing JWT secret: $JWT_SECRET_FILE"
+    fi
+    echo ""
+fi
+
+# ========================================
 # Initialize L2 Node
 # ========================================
 if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
@@ -560,6 +577,7 @@ if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
     fi
     
     # L2 node runs without mining - blocks are produced by the sequencer via Engine API
+    # Mount JWT secret file for Engine API authentication
     docker run -d \
         --name native-quickstart-l2 \
         --network "$NETWORK_NAME" \
@@ -567,6 +585,7 @@ if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
         -p "$L2_ENGINE_PORT:8551" \
         -p "$((L2_PORT + 1)):30303" \
         -v "$DATA_DIR/l2:/data" \
+        -v "$JWT_SECRET_FILE:/jwt.hex:ro" \
         "$GETH_IMAGE" \
         --datadir /data \
         --http \
@@ -578,13 +597,14 @@ if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
         --authrpc.addr 0.0.0.0 \
         --authrpc.port 8551 \
         --authrpc.vhosts "*" \
+        --authrpc.jwtsecret /jwt.hex \
         --networkid "$L2_CHAIN_ID" \
         --nodiscover \
         --override.osaka 0 \
         --verbosity 4 \
         --vmodule "rpc=5,http=5"
     
-    echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT - blocks produced by sequencer)"
+    echo "  ✅ L2 node started on port $L2_PORT (Engine API on $L2_ENGINE_PORT with JWT auth - blocks produced by sequencer)"
     echo ""
     
     # Wait for L2 to be ready
@@ -622,6 +642,10 @@ if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
     docker stop native-quickstart-sequencer 2>/dev/null || true
     docker rm native-quickstart-sequencer 2>/dev/null || true
     
+    # Read JWT secret and pass it to sequencer
+    L2_JWT_SECRET=$(cat "$JWT_SECRET_FILE" | tr -d '\n\r ')
+    
+    # Note: When connecting via Docker network, use internal container port (8551), not host port
     docker run -d \
         --name native-quickstart-sequencer \
         --network "$NETWORK_NAME" \
@@ -630,9 +654,10 @@ if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
         -v "$DATA_DIR/sequencer:/app/data" \
         -e L1_RPC_URL="http://native-quickstart-l1:8545" \
         -e L2_RPC_URL="http://native-quickstart-l2:8545" \
-        -e L2_ENGINE_API_PORT="$L2_ENGINE_PORT" \
+        -e L2_ENGINE_API_PORT="8551" \
         -e L1_CHAIN_ID="$L1_CHAIN_ID" \
         -e L2_CHAIN_ID="$L2_CHAIN_ID" \
+        -e L2_JWT_SECRET="$L2_JWT_SECRET" \
         -e SEQUENCER_KEY="$SEQUENCER_KEY" \
         -e API_PORT=8545 \
         -e METRICS_PORT=9090 \
@@ -885,7 +910,7 @@ if [ "$START_ALL" = true ] || [ "$START_L1_ONLY" = true ] || [ "$START_L2_ONLY" 
     fi
     if [ "$START_ALL" = true ] || [ "$START_L2_ONLY" = true ]; then
         echo "  🌐 L2 Node:      http://localhost:$L2_PORT"
-        echo "  🔧 L2 Engine:    http://localhost:$L2_ENGINE_PORT"
+        echo "  🔧 L2 Engine:    http://localhost:$L2_ENGINE_PORT (JWT auth enabled)"
     fi
     if [ "$START_ALL" = true ] || [ "$START_SEQUENCER_ONLY" = true ]; then
         echo "  🎯 Sequencer:    http://localhost:$SEQUENCER_PORT"

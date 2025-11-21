@@ -1,5 +1,9 @@
 # Data directories
 data/
+# JWT secret file (contains sensitive authentication key)
+data/jwt.hex
+*.jwt.hex
+jwt.hex
 *.db
 *.wal
 
